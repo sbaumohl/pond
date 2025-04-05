@@ -1,0 +1,34 @@
+[package]
+name = "pond"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "4.5.35"
+libudev-sys = "0.1.4"
+smithay = { version = "0.5.1", features = [
+    "backend_drm",
+    "backend_egl",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_session_libseat",
+    "backend_udev",
+    "backend_winit",
+    "desktop",
+    "renderer_gl",
+    "renderer_pixman",
+    "renderer_multi",
+    "use_system_lib",
+    "wayland_frontend",
+	"xwayland",
+	"winit"
+]}
+toml = "0.8.20"
+wayland-backend = "0.3.8"
+wayland-server = "0.31.7"
+wayland-client = "0.31.8"
+calloop = { version = "0.14.2", features = ["executor", "futures-io"] }
+tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_debug"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+winit = "0.30.9"
+wayland-protocols = "0.32.6"
