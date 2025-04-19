@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use calloop::EventLoop;
 use smithay::{
     backend::{
+        input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session},
         udev::UdevBackend,
@@ -47,8 +50,21 @@ fn main() {
 
     event_loop
         .handle()
-        .insert_source(libinput_backend, move |mut event, _, data| {})
+        .insert_source(libinput_backend, move |mut event, _, data| {
+            if let InputEvent::Keyboard { event } = event {
+                println!("{:#?}", event);
+            }
+        })
         .unwrap();
 
     println!("BACKEND SETUP!");
+    loop {
+        match event_loop.dispatch(Duration::from_millis(16), &mut Data {}) {
+            Ok(_) => {}
+            Err(err) => {
+                println!("Error! {}", err);
+                break;
+            }
+        }
+    }
 }
