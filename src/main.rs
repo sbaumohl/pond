@@ -1,29 +1,25 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use calloop::EventLoop;
+use calloop::{generic::Generic, EventLoop, Interest};
 use smithay::{
     backend::{
-        input::InputEvent,
         renderer::{
             damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
             gles::GlesRenderer,
         },
-        session::{self, libseat::LibSeatSession, Session},
         winit::WinitEvent,
     },
-    input::keyboard::KeyboardHandle,
     output::{Mode, Output, Subpixel},
-    reexports::input::{Device, Libinput},
     utils::Rectangle,
-    wayland::{
-        compositor::CompositorClientState, security_context::SecurityContext,
-        socket::ListeningSocketSource,
-    },
+    wayland::{compositor::CompositorClientState, security_context::SecurityContext},
 };
+use tracing::field::display;
 use wayland_backend::server::{ClientId, DisconnectReason};
 use wayland_server::{Display, DisplayHandle};
 
 mod pondcore;
+mod state_handlers;
+mod xdg_shell;
 use pondcore::PondState;
 
 #[derive(Debug, Default)]
@@ -51,14 +47,6 @@ fn main() {
     let mut event_loop: EventLoop<LoopData> = EventLoop::try_new().unwrap();
     let display: Display<PondState> = Display::new().unwrap();
     let dis_handle = display.handle();
-
-    // let (session, notifier) = match LibSeatSession::new() {
-    //     Ok(ret) => ret,
-    //     Err(err) => {
-    //         println!("{}", err);
-    //         panic!("Could not start a session!");
-    //     }
-    // };
 
     let (mut backend, mut winit) = match smithay::backend::winit::init::<GlesRenderer>() {
         Ok(ret) => ret,
@@ -92,9 +80,6 @@ fn main() {
 
     let _global = output.create_global::<PondState>(&dis_handle);
 
-    let source = ListeningSocketSource::new_auto().unwrap();
-    let socket_name = source.socket_name().to_string_lossy().into_owned();
-
     let mut state: PondState = PondState::init(&mut event_loop, &display);
 
     state.space.map_output(&output, (0, 0));
@@ -105,7 +90,19 @@ fn main() {
     };
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
-    event_loop
+
+    let _ = event_loop.handle().insert_source(
+        Generic::new(display, Interest::READ, calloop::Mode::Level),
+        |_, display, state| {
+            println!("Insert!");
+            unsafe {
+                display.get_mut().dispatch_clients(&mut state.data).unwrap();
+            }
+            Ok(calloop::PostAction::Continue)
+        },
+    );
+
+    let _ = event_loop
         .handle()
         .insert_source(winit, move |event, _, data| {
             let display = &mut data.handle;
@@ -170,15 +167,5 @@ fn main() {
             };
         });
 
-    println!("BACKEND SETUP!");
-    // while state.running.load(std::sync::atomic::Ordering::SeqCst) {
-    //     match event_loop.dispatch(Duration::from_millis(16), &mut data) {
-    //         Ok(_) => {}
-    //         Err(err) => {
-    //             println!("Error! {}", err);
-    //             break;
-    //         }
-    //     }
-    // }
-    event_loop.run(None, &mut data, move |_| {});
+    event_loop.run(None, &mut data, move |_| {}).unwrap();
 }
