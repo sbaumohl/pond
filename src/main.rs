@@ -13,14 +13,17 @@ use smithay::{
     utils::Rectangle,
     wayland::{compositor::CompositorClientState, security_context::SecurityContext},
 };
-use tracing::field::display;
 use wayland_backend::server::{ClientId, DisconnectReason};
 use wayland_server::{Display, DisplayHandle};
 
+mod config;
+mod input;
 mod pondcore;
 mod state_handlers;
 mod xdg_shell;
 use pondcore::PondState;
+
+use crate::config::schema::Configuration;
 
 #[derive(Debug, Default)]
 pub struct ClientState {
@@ -44,6 +47,8 @@ struct LoopData {
 }
 
 fn main() {
+    let conf = Configuration::from_file("./example.toml".to_string());
+
     let mut event_loop: EventLoop<LoopData> = EventLoop::try_new().unwrap();
     let display: Display<PondState> = Display::new().unwrap();
     let dis_handle = display.handle();
@@ -52,7 +57,6 @@ fn main() {
         Ok(ret) => ret,
         Err(err) => {
             panic!("Could not initialize winit");
-            return;
         }
     };
 
@@ -80,7 +84,7 @@ fn main() {
 
     let _global = output.create_global::<PondState>(&dis_handle);
 
-    let mut state: PondState = PondState::init(&mut event_loop, &display);
+    let mut state: PondState = PondState::init(&mut event_loop, &display, conf);
 
     state.space.map_output(&output, (0, 0));
 
@@ -94,7 +98,6 @@ fn main() {
     let _ = event_loop.handle().insert_source(
         Generic::new(display, Interest::READ, calloop::Mode::Level),
         |_, display, state| {
-            println!("Insert!");
             unsafe {
                 display.get_mut().dispatch_clients(&mut state.data).unwrap();
             }

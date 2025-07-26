@@ -13,6 +13,7 @@ impl XdgShellHandler for PondState {
         seat: wayland_server::protocol::wl_seat::WlSeat,
         serial: smithay::utils::Serial,
     ) {
+        println!("Grab!");
     }
 
     fn new_popup(
@@ -20,6 +21,7 @@ impl XdgShellHandler for PondState {
         surface: smithay::wayland::shell::xdg::PopupSurface,
         positioner: smithay::wayland::shell::xdg::PositionerState,
     ) {
+        println!("New Popup!");
     }
 
     fn new_client(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {}
@@ -28,8 +30,7 @@ impl XdgShellHandler for PondState {
 
     fn new_toplevel(&mut self, surface: smithay::wayland::shell::xdg::ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window, (0, 0), true);
-        println!("New Client");
+        self.space.map_element(window, (100, 100), true);
     }
 
     fn move_request(

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashMap, HashSet},
     env,
     process::Command,
     sync::{atomic::AtomicBool, Arc},
@@ -13,20 +13,26 @@ use smithay::{
     },
     desktop::{PopupManager, Space, WindowSurfaceType},
     input::{
-        keyboard::{FilterResult, Keysym},
+        keyboard::{FilterResult, Keysym, ModifiersState},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
         Seat, SeatState,
     },
     utils::{Logical, Point, SERIAL_COUNTER},
     wayland::{
-        compositor::CompositorState, output::OutputManagerState,
-        selection::data_device::DataDeviceState, shell::xdg::XdgShellState, shm::ShmState,
-        socket::ListeningSocketSource,
+        compositor::CompositorState, fractional_scale::FractionalScaleManagerState,
+        output::OutputManagerState, selection::data_device::DataDeviceState,
+        shell::xdg::XdgShellState, shm::ShmState, socket::ListeningSocketSource,
     },
 };
 use wayland_server::{protocol::wl_surface::WlSurface, Display, DisplayHandle};
 
-use crate::{ClientState, LoopData};
+use crate::{config::schema::Configuration, ClientState, LoopData};
+
+#[derive(Debug)]
+pub struct WindowGrab {
+    pub window: smithay::desktop::Window,
+    pub grab_offset: Point<i32, Logical>,
+}
 
 #[derive(Debug)]
 pub struct PondState {
@@ -51,12 +57,20 @@ pub struct PondState {
     pub seat: Seat<Self>,
     pub start_time: std::time::Instant,
     pub loop_signal: LoopSignal,
+
+    pub keybindings: HashMap<Keybinding, UserCommand>,
+
+    // fractional scaling
+    pub fractional_scale_manager: FractionalScaleManagerState,
+
+    pub grabbed_window: Option<WindowGrab>,
 }
 
 impl PondState {
     pub fn init(
         event_loop: &mut EventLoop<LoopData>,
         display: &Display<PondState>,
+        config: Configuration,
         // session: LibSeatSession,
     ) -> Self {
         let source = ListeningSocketSource::new_auto().unwrap();
@@ -66,6 +80,7 @@ impl PondState {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&display.handle(), "winit");
         seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        seat.add_pointer();
 
         let d_handle = display.handle();
 
@@ -97,6 +112,11 @@ impl PondState {
             start_time: std::time::Instant::now(),
             loop_signal: event_loop.get_signal(),
             xdg_shell_state: XdgShellState::new::<Self>(&d_handle),
+            fractional_scale_manager: FractionalScaleManagerState::new::<PondState>(
+                &display.handle(),
+            ),
+            keybindings: parse_bindings(&config).unwrap(),
+            grabbed_window: None,
         }
     }
 
@@ -114,159 +134,56 @@ impl PondState {
     }
 }
 
-impl PondState {
-    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
-        match event {
-            InputEvent::Keyboard { event, .. } => {
-                let serial = SERIAL_COUNTER.next_serial();
-                let time = Event::time_msec(&event);
+#[derive(Debug)]
+pub enum UserCommand {
+    Execute(String),
+    Quit,
+    Shutdown,
+    LogOut,
+}
 
-                self.seat.get_keyboard().unwrap().input::<(), _>(
-                    self,
-                    event.key_code(),
-                    event.state(),
-                    serial,
-                    time,
-                    |state, modifiers_state, handler| {
-                        match event.state() {
-                            smithay::backend::input::KeyState::Pressed => {
-                                state.pressed_keys.insert(handler.modified_sym());
-                            }
-                            smithay::backend::input::KeyState::Released => {
-                                state.pressed_keys.remove(&handler.modified_sym());
-                            }
-                        }
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Keybinding {
+    pub key: Keysym,
+    pub modifiers: ModifiersState,
+}
 
-                        if state.pressed_keys == HashSet::from_iter([Keysym::D, Keysym::Shift_L]) {
-                            env::set_var("WAYLAND_DISPLAY", &state.socket_name);
-                            match Command::new("foot").spawn() {
-                                Ok(child) => {
-                                    println!("CHILD: {}", child.id());
-                                }
-                                Err(e) => {
-                                    panic!("Error spawning program!");
-                                }
-                            }
-                            FilterResult::Intercept(())
-                        } else {
-                            FilterResult::Forward
-                        }
-                    },
-                );
-            }
-            InputEvent::PointerMotion { .. } => {}
-            InputEvent::PointerMotionAbsolute { event, .. } => {
-                return;
-                let output = self.space.outputs().next().unwrap();
+impl Keybinding {
+    pub fn new(key: Keysym, modifiers: ModifiersState) -> Self {
+        Keybinding { key, modifiers }
+    }
+}
 
-                let output_geo = self.space.output_geometry(output).unwrap();
+pub fn parse_bindings(config: &Configuration) -> Result<HashMap<Keybinding, UserCommand>, String> {
+    let mut bindings: HashMap<Keybinding, UserCommand> =
+        HashMap::with_capacity(config.keybinds.len());
 
-                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
+    'binding: for binding in &config.keybinds {
+        let mut key: Option<Keysym> = None;
+        let mut modifiers: ModifiersState = ModifiersState::default();
+        modifiers.serialized.depressed = 1;
 
-                let serial = SERIAL_COUNTER.next_serial();
-
-                let pointer = self.seat.get_pointer().unwrap();
-
-                let under = self.surface_under(pos);
-
-                pointer.motion(
-                    self,
-                    under,
-                    &MotionEvent {
-                        location: pos,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(self);
-            }
-            InputEvent::PointerButton { event, .. } => {
-                return;
-                let pointer = self.seat.get_pointer().unwrap();
-                let keyboard = self.seat.get_keyboard().unwrap();
-
-                let serial = SERIAL_COUNTER.next_serial();
-
-                let button = event.button_code();
-
-                let button_state = event.state();
-
-                if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                    if let Some((window, _loc)) = self
-                        .space
-                        .element_under(pointer.current_location())
-                        .map(|(w, l)| (w.clone(), l))
-                    {
-                        self.space.raise_element(&window, true);
-                        keyboard.set_focus(
-                            self,
-                            Some(window.toplevel().unwrap().wl_surface().clone()),
-                            serial,
-                        );
-                        self.space.elements().for_each(|window| {
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                    } else {
-                        self.space.elements().for_each(|window| {
-                            window.set_activated(false);
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                    }
-                };
-
-                pointer.button(
-                    self,
-                    &ButtonEvent {
-                        button,
-                        state: button_state,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(self);
-            }
-            InputEvent::PointerAxis { event, .. } => {
-                return;
-                let source = event.source();
-
-                let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.
-                });
-                let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.
-                });
-                let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
-                let vertical_amount_discrete = event.amount_v120(Axis::Vertical);
-
-                let mut frame = AxisFrame::new(event.time_msec()).source(source);
-                if horizontal_amount != 0.0 {
-                    frame = frame.value(Axis::Horizontal, horizontal_amount);
-                    if let Some(discrete) = horizontal_amount_discrete {
-                        frame = frame.v120(Axis::Horizontal, discrete as i32);
-                    }
+        for maybe_key in binding.key.to_lowercase().split("+") {
+            match maybe_key {
+                "super" => modifiers.logo = true,
+                "ctrl" => modifiers.ctrl = true,
+                "shift" => modifiers.shift = true,
+                c if c.len() == 1 => {
+                    key = Some(Keysym::from_char(c.chars().next().unwrap()));
                 }
-                if vertical_amount != 0.0 {
-                    frame = frame.value(Axis::Vertical, vertical_amount);
-                    if let Some(discrete) = vertical_amount_discrete {
-                        frame = frame.v120(Axis::Vertical, discrete as i32);
-                    }
+                _ => {
+                    continue 'binding;
                 }
+            };
+        }
 
-                if source == AxisSource::Finger {
-                    if event.amount(Axis::Horizontal) == Some(0.0) {
-                        frame = frame.stop(Axis::Horizontal);
-                    }
-                    if event.amount(Axis::Vertical) == Some(0.0) {
-                        frame = frame.stop(Axis::Vertical);
-                    }
-                }
-
-                let pointer = self.seat.get_pointer().unwrap();
-                pointer.axis(self, frame);
-                pointer.frame(self);
-            }
-            _ => {}
+        if let Some(k) = key {
+            bindings.insert(
+                Keybinding::new(k, modifiers),
+                UserCommand::Execute(binding.command.clone()),
+            );
         }
     }
+
+    Ok(bindings)
 }

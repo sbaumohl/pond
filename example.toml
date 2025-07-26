@@ -1,0 +1,9 @@
+ip = 42069
+
+[[keybinds]]
+key = "shift+t"
+command = "foot"
+
+[[keybinds]]
+key = "shift+f"
+command = "firefox"

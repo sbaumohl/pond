@@ -1,6 +1,7 @@
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
+    delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_output,
+    delegate_seat, delegate_shm,
     desktop::{PopupKind, PopupManager, Space, Window},
     input::{Seat, SeatHandler, SeatState},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -10,6 +11,7 @@ use smithay::{
             get_parent, is_sync_subsurface, with_states, CompositorClientState, CompositorHandler,
             CompositorState,
         },
+        fractional_scale::FractionalScaleHandler,
         output::OutputHandler,
         selection::{
             data_device::{
@@ -26,7 +28,6 @@ use wayland_server::{protocol::wl_buffer, Client, Resource};
 
 use crate::{pondcore::PondState, ClientState};
 
-/// Should be called on `WlSurface::commit`
 pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: &WlSurface) {
     // Handle toplevel commits.
     if let Some(window) = space
@@ -94,6 +95,8 @@ impl CompositorHandler for PondState {
 
         // ::handle_commit(&mut self.space, surface);
     }
+
+    fn destroyed(&mut self, _surface: &WlSurface) {}
 }
 
 impl BufferHandler for PondState {
@@ -142,6 +145,14 @@ impl DataDeviceHandler for PondState {
 impl ClientDndGrabHandler for PondState {}
 impl ServerDndGrabHandler for PondState {}
 impl OutputHandler for PondState {}
+
+impl FractionalScaleHandler for PondState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        // If you set preferred fractional scale for this surface before,
+        // then you don't need to do anything here.
+    }
+}
+delegate_fractional_scale!(PondState);
 
 delegate_seat!(PondState);
 delegate_data_device!(PondState);

@@ -32,3 +32,4 @@ tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_leve
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 winit = "0.30.9"
 wayland-protocols = "0.32.6"
+serde = { version = "1.0.219", features = ["derive"] }
