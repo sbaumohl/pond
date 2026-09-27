@@ -2,9 +2,10 @@ use std::fmt::Debug;
 
 use ahash::AHashMap as HashMap;
 use smithay::{
-    backend::renderer::element::Kind,
     desktop::{Space, Window, space::SpaceElement},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Rectangle},
+    wayland::compositor::with_states,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,107 +33,125 @@ impl<T: Debug + PartialEq + Eq> Workspace<T> {
         id
     }
 
-    // TODO workspace should own creating new nodes because of node_id coupling
-    // should take parent node as argument, handle splitting
-    // do not mess with the nodeid -> data invariant
-    // we'd traverse to the parent, replace with a new split node, and set the left to the caller
-    // and the right to the new node
-    // if you somehow call on a split, then the reallocation is a similar process
-
-    fn find_node_id(&self, target: &T) -> Option<NodeId> {
-        self.nodes
-            .iter()
-            .find(|(_, item)| {
-                if let InnerNode::Leaf(leaf) = &item.inner {
-                    leaf.data == *target
-                } else {
-                    false
-                }
-            })
-            .map(|(node_id, _)| node_id.clone())
-    }
-
-    // TODO don't let this fail silently - return a result
-    pub fn add_node(&mut self, parent: Option<&T>, data: T) {
-        if self.root.is_none() && parent.is_none() {
-            self.add_node_inner(None, data);
-        } else if let Some(inner_parent) = parent
-            && let Some(node_id) = self.find_node_id(inner_parent)
-        {
-            self.add_node_inner(Some(node_id), data);
-        }
-    }
-
-    fn add_node_inner(&mut self, parent: Option<NodeId>, data: T) {
+    pub fn add_node(&mut self, parent: Option<NodeId>, data: T) -> Result<NodeId, String> {
         let new_id = self.alloc_id();
-        let mut new_node = Node {
+        let mut new_leaf = Node {
             inner: InnerNode::Leaf(Leaf { data }),
             id: new_id,
             parent: None,
         };
-        if self.root.is_none() {
-            self.root = Some(new_id);
-            self.nodes.insert(new_id, new_node);
 
+        // The very first node becomes the root leaf; there is nothing to split.
+        if self.root.is_none() {
             if parent.is_some() {
                 panic!("How are you passing in a parent when workspace root is None!?");
             }
-            return;
+            self.root = Some(new_id);
+            self.nodes.insert(new_id, new_leaf);
+            return Ok(new_id);
         }
 
-        let parent_node_id =
+        let target_id =
             parent.expect("Expected a valid parent root NodeId for new element, got None");
-        let new_parent_node_id = self.alloc_id();
-        let parent_node = &mut self
+        let target = self
             .nodes
-            .get(&parent_node_id)
+            .get(&target_id)
             .expect("Data for NodeId unexpectedly missing!");
 
-        match &parent_node.inner {
-            InnerNode::Leaf(_leaf) => {
-                // 1. mint a new node thats a split, it will hold the former parent and new id
-                let new_parent_node = Node {
-                    id: new_parent_node_id,
-                    inner: InnerNode::<T>::Split(Split {
-                        axis: Axis::Vertical,
-                        split_ratio: 0.5,
-                        left: parent_node_id,
-                        right: new_id,
-                    }),
-                    parent: parent_node.parent,
-                };
+        if !matches!(target.inner, InnerNode::Leaf(_)) {
+            panic!("Not implemented yet!");
+        }
+        // Copy this out so the borrow of `self.nodes` ends before `alloc_id`.
+        let target_parent = target.parent;
 
-                // 2. now find the former parent's parent
-                if let Some(grandparent_node_id) = parent_node.parent {
-                    let grandparent_node = self
-                        .nodes
-                        .get_mut(&grandparent_node_id)
-                        .expect("Expected a valid grandparent root NodeId!");
+        // Mint a split that takes the target leaf's place in the tree and holds
+        // both it and the new leaf.
+        let split_id = self.alloc_id();
+        let split = Node {
+            id: split_id,
+            inner: InnerNode::Split(Split {
+                axis: Axis::Vertical,
+                split_ratio: 0.5,
+                left: target_id,
+                right: new_id,
+            }),
+            parent: target_parent,
+        };
+        self.nodes.insert(split_id, split);
 
-                    if let InnerNode::Split(grandparent_split) = &mut grandparent_node.inner {
-                        if grandparent_split.left == parent_node_id {
-                            grandparent_split.left = new_parent_node_id;
-                        } else if grandparent_split.right == parent_node_id {
-                            grandparent_split.right = new_parent_node_id;
-                        }
+        // Re-point the target's former parent -- or the root -- at the split.
+        // Must run before the target's own parent is rewritten below.
+        self.compare_and_swap_parents(target_id, split_id);
+
+        self.nodes.get_mut(&target_id).unwrap().parent = Some(split_id);
+        new_leaf.parent = Some(split_id);
+        self.nodes.insert(new_id, new_leaf);
+
+        Ok(new_id)
+    }
+
+    pub fn remove_node(&mut self, target: NodeId) {
+        let maybe_node = self.nodes.get(&target);
+        if let Some(node) = maybe_node
+            && let InnerNode::Leaf(inner_leaf) = &node.inner
+        {
+            // 1. is this root?
+            if node.parent.is_none()
+                && let Some(root) = self.root
+                && root == target
+            {
+                self.root = None;
+            } else if let Some(parent_id) = node.parent {
+                // 2. find parent split
+                let parent_node = self
+                    .nodes
+                    .get(&parent_id)
+                    .expect("Could not retrieve node id!");
+
+                if let InnerNode::Split(parent_split) = &parent_node.inner {
+                    // 2a. is the target the left or the right child?
+                    if parent_split.left == target {
+                        self.compare_and_swap_parents(parent_id, parent_split.right);
+                    } else if parent_split.right == target {
+                        self.compare_and_swap_parents(parent_id, parent_split.left);
                     }
-                } else {
-                    self.root = Some(new_parent_node_id)
                 }
-
-                // 3. link both children to the new split, then insert into our hashmap
-                self.nodes.get_mut(&parent_node_id).unwrap().parent = Some(new_parent_node_id);
-                new_node.parent = Some(new_parent_node_id);
-                self.nodes.insert(new_parent_node_id, new_parent_node);
-                self.nodes.insert(new_id, new_node);
-            }
-            InnerNode::Split(_split) => {
-                panic!("Not implemented yet!")
             }
         }
     }
 
-    pub fn remove_node(&mut self, target: NodeId) {}
+    /*
+     * find `current_child`'s parent, which will be split or None (root case)
+     * determine whether `current_child` is left or right child, and then
+     * replace it with new_child
+     *
+     */
+    fn compare_and_swap_parents(&mut self, current_child: NodeId, new_child: NodeId) {
+        let parent = self
+            .nodes
+            .get(&current_child)
+            .expect("Could not retrieve node id!")
+            .parent;
+
+        if let Some(parent_node_id) = parent {
+            let parent_node = self
+                .nodes
+                .get_mut(&parent_node_id)
+                .expect("Could not retrieve node id!");
+
+            if let InnerNode::Split(inner) = &mut parent_node.inner {
+                if inner.left == current_child {
+                    inner.left = new_child;
+                } else if inner.right == current_child {
+                    inner.right = new_child;
+                }
+            }
+        } else if let Some(root) = self.root
+            && root == current_child
+        {
+            self.root = Some(new_child);
+        }
+    }
 
     pub fn get_data(&self, id: NodeId) -> Option<&T> {
         if let Some(node) = self.nodes.get(&id) {
@@ -156,7 +175,7 @@ impl<T: Debug + SpaceElement + PartialEq + Eq + Clone> Workspace<T> {
         if let Some(root) = self.root {
             self.layout_node(root, area, &mut out);
         }
-        return out;
+        out
     }
 
     fn layout_node(
@@ -209,7 +228,7 @@ impl<T: Debug + SpaceElement + PartialEq + Eq + Clone> Workspace<T> {
 impl Workspace<Window> {
     pub fn apply_layout(&self, space: &mut Space<Window>) {
         let output = space.outputs().next().unwrap();
-        let area = space.output_geometry(&output).unwrap();
+        let area = space.output_geometry(output).unwrap();
         let elements = self.layout(area);
         for (rec, node_id) in elements {
             let element = (self.get_data(node_id).unwrap()).clone();
@@ -218,6 +237,29 @@ impl Workspace<Window> {
             top_lvl.send_pending_configure();
             space.map_element(element, rec.loc, false);
         }
+    }
+
+    pub fn add_window(&mut self, parent: Option<NodeId>, window: Window) -> Result<NodeId, String> {
+        let new_node_id = self.add_node(parent, window.clone())?;
+
+        window
+            .user_data()
+            .insert_if_missing_threadsafe::<NodeId, _>(|| new_node_id);
+
+        if let Some(top_level) = window.toplevel() {
+            with_states(top_level.wl_surface(), |states| {
+                states
+                    .data_map
+                    .insert_if_missing_threadsafe::<NodeId, _>(|| new_node_id);
+            });
+        }
+
+        Ok(new_node_id)
+    }
+
+    pub fn remove_window(&mut self, window: Window) {
+        let node_id = window.user_data().get::<NodeId>().unwrap();
+        self.remove_node(*node_id);
     }
 }
 

@@ -1,12 +1,6 @@
 use smithay::{
-    desktop::{
-        PopupKind, PopupManager, Space, Window, find_popup_root_surface, get_popup_toplevel_coords,
-        space::SpaceElement,
-    },
-    input::{
-        Seat,
-        pointer::{Focus, GrabStartData as PointerGrabStartData},
-    },
+    desktop::{PopupKind, PopupManager, Space, Window},
+    input::{Seat, pointer::GrabStartData as PointerGrabStartData},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -14,9 +8,9 @@ use smithay::{
             protocol::{wl_seat, wl_surface::WlSurface},
         },
     },
-    utils::{Rectangle, Serial},
+    utils::Serial,
     wayland::{
-        compositor::{get_parent, with_states},
+        compositor::with_states,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
             XdgToplevelSurfaceData,
@@ -24,7 +18,7 @@ use smithay::{
     },
 };
 
-use crate::state::AppState;
+use crate::{spacing::NodeId, state::AppState};
 
 fn check_grab(
     seat: &Seat<AppState>,
@@ -58,18 +52,31 @@ impl XdgShellHandler for AppState {
         if let Some(wl_surface) = surface.parent() {
             println!("parent= {:#?} destroyed!", wl_surface);
         }
+
+        if let Some(node_id) = with_states(surface.wl_surface(), |user_data| {
+            user_data.data_map.get::<NodeId>().cloned()
+        }) {
+            self.layout_tree.remove_node(node_id);
+        }
+
+        self.layout_tree.apply_layout(&mut self.space);
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
-        let focused: Option<WlSurface> = self.seat.get_keyboard().unwrap().current_focus();
-        let parent = focused.and_then(|focused_inner| {
-            self.space
-                .elements()
-                .find(|element| element.toplevel().unwrap().wl_surface() == &focused_inner)
-        });
 
-        self.layout_tree.add_node(parent, window);
+        let parent_node_id = self
+            .seat
+            .get_keyboard()
+            .unwrap()
+            .current_focus()
+            .and_then(|focus| {
+                with_states(&focus, |user_data| {
+                    user_data.data_map.get::<NodeId>().copied()
+                })
+            });
+
+        let _ = self.layout_tree.add_window(parent_node_id, window.clone());
         self.layout_tree.apply_layout(&mut self.space);
     }
 
@@ -129,22 +136,23 @@ impl XdgShellHandler for AppState {
         let seat = Seat::from_resource(&seat).unwrap();
 
         let wl_surface = surface.wl_surface();
+        self.layout_tree.apply_layout(&mut self.space);
 
         if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
             let pointer = seat.get_pointer().unwrap();
-
-            let window = self
-                .space
-                .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
-                .unwrap()
-                .clone();
-
-            let (parent, _) = self
-                .space
-                .element_under(pointer.current_location())
-                .unwrap();
-            self.layout_tree.add_node(Some(parent), window);
+            //
+            // let window = self
+            //     .space
+            //     .elements()
+            //     .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
+            //     .unwrap()
+            //     .clone();
+            //
+            // let (parent, _) = self
+            //     .space
+            //     .element_under(pointer.current_location())
+            //     .unwrap();
+            // self.layout_tree.add_node(Some(parent), window);
 
             // let grab = ResizeSurfaceGrab::start(
             //     start_data,
