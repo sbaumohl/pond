@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use ahash::AHashMap as HashMap;
 use smithay::{
     desktop::{Space, Window, space::SpaceElement},
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Rectangle},
     wayland::compositor::with_states,
 };
@@ -93,7 +92,7 @@ impl<T: Debug + PartialEq + Eq> Workspace<T> {
     pub fn remove_node(&mut self, target: NodeId) {
         let maybe_node = self.nodes.get(&target);
         if let Some(node) = maybe_node
-            && let InnerNode::Leaf(inner_leaf) = &node.inner
+            && matches!(&node.inner, InnerNode::Leaf(_))
         {
             // 1. is this root?
             if node.parent.is_none()
@@ -115,9 +114,12 @@ impl<T: Debug + PartialEq + Eq> Workspace<T> {
                     } else if parent_split.right == target {
                         self.compare_and_swap_parents(parent_id, parent_split.left);
                     }
+                    self.nodes.remove(&parent_id);
                 }
             }
         }
+
+        self.nodes.remove(&target);
     }
 
     /*
@@ -132,6 +134,8 @@ impl<T: Debug + PartialEq + Eq> Workspace<T> {
             .get(&current_child)
             .expect("Could not retrieve node id!")
             .parent;
+
+        self.nodes.get_mut(&new_child).unwrap().parent = parent;
 
         if let Some(parent_node_id) = parent {
             let parent_node = self
@@ -166,10 +170,6 @@ impl<T: Debug + PartialEq + Eq> Workspace<T> {
 }
 
 impl<T: Debug + SpaceElement + PartialEq + Eq + Clone> Workspace<T> {
-    /*
-     * Convert entire workspace into series of
-     *
-     */
     fn layout(&self, area: Rectangle<i32, Logical>) -> Vec<(Rectangle<i32, Logical>, NodeId)> {
         let mut out: Vec<(Rectangle<i32, Logical>, NodeId)> = Vec::new();
         if let Some(root) = self.root {
@@ -255,11 +255,6 @@ impl Workspace<Window> {
         }
 
         Ok(new_node_id)
-    }
-
-    pub fn remove_window(&mut self, window: Window) {
-        let node_id = window.user_data().get::<NodeId>().unwrap();
-        self.remove_node(*node_id);
     }
 }
 

@@ -6,7 +6,7 @@ use smithay::{
         Resource,
         protocol::{
             wl_buffer, wl_compositor::WlCompositor, wl_output::WlOutput, wl_shm::WlShm,
-            wl_subcompositor::WlSubcompositor, wl_surface::WlSurface,
+            wl_surface::WlSurface,
         },
     },
     wayland::{

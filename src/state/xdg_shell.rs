@@ -59,7 +59,7 @@ impl XdgShellHandler for AppState {
             self.layout_tree.remove_node(node_id);
         }
 
-        self.layout_tree.apply_layout(&mut self.space);
+        self.apply_layouts();
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
@@ -77,7 +77,7 @@ impl XdgShellHandler for AppState {
             });
 
         let _ = self.layout_tree.add_window(parent_node_id, window.clone());
-        self.layout_tree.apply_layout(&mut self.space);
+        self.apply_layouts();
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

@@ -42,7 +42,6 @@ pub struct AppState {
     pub popups: PopupManager,
     pub loop_signal: LoopSignal,
 
-    pub grid_state: Vec<Vec<bool>>,
     pub layout_tree: Workspace<Window>,
 }
 
@@ -82,7 +81,6 @@ impl AppState {
             display_handle: dh,
             socket_name: Self::init_wayland_socket(event_loop, display),
             loop_signal: event_loop.get_signal(),
-            grid_state: vec![vec![false; 5]; 5],
             layout_tree: Workspace::new(),
         }
     }
@@ -120,6 +118,10 @@ impl AppState {
         );
 
         socket_name
+    }
+
+    fn apply_layouts(&mut self) {
+        self.layout_tree.apply_layout(&mut self.space);
     }
 
     pub fn surface_under(
