@@ -2,20 +2,21 @@ use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    desktop::{PopupManager, Space, Window, WindowSurfaceType},
+    delegate_primary_selection,
+    desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output},
     input::{Seat, SeatState},
     reexports::{
         calloop::{EventLoop, LoopSignal, PostAction, generic},
         wayland_server::{Display, DisplayHandle, protocol::wl_surface::WlSurface},
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, SERIAL_COUNTER},
     wayland::{
         compositor::{
             CompositorClientState, CompositorHandler, CompositorState, get_parent,
             is_sync_subsurface,
         },
-        selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
+        shell::{wlr_layer::WlrLayerShellState, xdg::XdgShellState},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -25,6 +26,7 @@ use wayland_backend::server::ClientData;
 use crate::spacing::Workspace;
 
 mod global_dispatch;
+mod wlr_layer_shell_handler;
 mod xdg_shell;
 
 #[derive(Debug)]
@@ -43,6 +45,9 @@ pub struct AppState {
     pub loop_signal: LoopSignal,
 
     pub layout_tree: Workspace<Window>,
+    pub primary_selection_state: PrimarySelectionState,
+
+    pub wlr_layer_shell_state: WlrLayerShellState,
 }
 
 impl AppState {
@@ -78,10 +83,12 @@ impl AppState {
             data_device_state: DataDeviceState::new::<Self>(&dh),
             compositor_state,
             shm_state,
-            display_handle: dh,
             socket_name: Self::init_wayland_socket(event_loop, display),
             loop_signal: event_loop.get_signal(),
             layout_tree: Workspace::new(),
+            primary_selection_state: PrimarySelectionState::new::<Self>(&dh),
+            wlr_layer_shell_state: WlrLayerShellState::new::<Self>(&dh),
+            display_handle: dh,
         }
     }
 
@@ -120,7 +127,7 @@ impl AppState {
         socket_name
     }
 
-    fn apply_layouts(&mut self) {
+    pub fn apply_layouts(&mut self) {
         self.layout_tree.apply_layout(&mut self.space);
     }
 
@@ -190,6 +197,36 @@ impl CompositorHandler for AppState {
                 window.on_commit();
             }
         }
+
+        let mapped_output = self
+            .space
+            .outputs()
+            .find(|o| {
+                let map = layer_map_for_output(o);
+                map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                    .is_some()
+            })
+            .cloned();
+
+        if let Some(tl_output) = mapped_output {
+            let mut map = layer_map_for_output(&tl_output);
+            map.arrange();
+
+            let layer = map
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                .unwrap();
+            layer.layer_surface().send_configure();
+
+            if layer.can_receive_keyboard_focus() {
+                self.seat.get_keyboard().unwrap().set_focus(
+                    self,
+                    Some(layer.wl_surface().clone()),
+                    SERIAL_COUNTER.next_serial(),
+                );
+            }
+        }
+
+        // layer_map_for_output();
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
     }

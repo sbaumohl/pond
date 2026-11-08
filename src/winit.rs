@@ -8,6 +8,7 @@ use smithay::{
         },
         winit::{self, WinitEvent},
     },
+    desktop::layer_map_for_output,
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
     utils::{Rectangle, Transform},
@@ -63,6 +64,8 @@ pub fn init_winit(
                         None,
                         None,
                     );
+
+                    state.apply_layouts();
                 }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
@@ -100,8 +103,18 @@ pub fn init_winit(
                         )
                     });
 
+                    // now send frame for layers
+                    for layer in layer_map_for_output(&output).layers() {
+                        layer.send_frame(
+                            &output,
+                            state.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output.clone()),
+                        );
+                    }
+
                     state.space.refresh();
-                    // state.popups.cleanup();
+                    state.popups.cleanup();
                     let _ = state.display_handle.flush_clients();
 
                     // Ask for redraw to schedule new frame.

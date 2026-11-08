@@ -1,7 +1,9 @@
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
+    delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
+    desktop::{LayerSurface, layer_map_for_output},
     input::SeatHandler,
+    output::Output,
     reexports::wayland_server::{
         Resource,
         protocol::{
@@ -9,16 +11,21 @@ use smithay::{
             wl_surface::WlSurface,
         },
     },
+    utils::{SERIAL_COUNTER, Serial},
     wayland::{
         buffer::BufferHandler,
-        output::{OutputHandler, WlOutputData},
+        output::OutputHandler,
         selection::{
             SelectionHandler,
             data_device::{
                 ClientDndGrabHandler, DataDeviceHandler, ServerDnDGrab, ServerDndGrabHandler,
                 set_data_device_focus,
             },
+            primary_selection::{
+                PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
+            },
         },
+        shell::wlr_layer::WlrLayerShellHandler,
         shm::ShmHandler,
     },
 };
@@ -52,7 +59,8 @@ impl SeatHandler for AppState {
     ) {
         let dh = &self.display_handle;
         let client = _focused.and_then(|s| dh.get_client(s.id()).ok());
-        set_data_device_focus(dh, seat, client);
+        set_data_device_focus(dh, seat, client.clone());
+        set_primary_focus(dh, seat, client);
     }
     fn cursor_image(
         &mut self,
@@ -86,6 +94,13 @@ impl OutputHandler for AppState {
     }
 }
 
+impl PrimarySelectionHandler for AppState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
+    }
+}
+
+delegate_primary_selection!(AppState);
 delegate_output!(AppState);
 delegate_compositor!(AppState);
 delegate_data_device!(AppState);
