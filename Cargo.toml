@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ahash = "0.8.12"
+ahash = { version = "0.8.12", features = ["std"] }
 smithay = "0.7.0"
 wayland-backend = "0.3.17"
 

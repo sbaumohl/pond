@@ -11,7 +11,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use crate::state::AppState;
+use crate::state::{AppState, config::keybinding_pass};
 
 impl AppState {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -26,7 +26,7 @@ impl AppState {
                     event.state(),
                     serial,
                     time as u32,
-                    |_, _, _| FilterResult::Forward,
+                    keybinding_pass,
                 );
             }
             InputEvent::PointerMotion { .. } => {}

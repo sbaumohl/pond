@@ -23,8 +23,9 @@ use smithay::{
 };
 use wayland_backend::server::ClientData;
 
-use crate::spacing::Workspace;
+use crate::{spacing::Workspace, state::config::UserConfig};
 
+pub mod config;
 mod global_dispatch;
 mod wlr_layer_shell_handler;
 mod xdg_shell;
@@ -46,8 +47,9 @@ pub struct AppState {
 
     pub layout_tree: Workspace<Window>,
     pub primary_selection_state: PrimarySelectionState,
-
     pub wlr_layer_shell_state: WlrLayerShellState,
+
+    pub user_config: UserConfig,
 }
 
 impl AppState {
@@ -89,6 +91,7 @@ impl AppState {
             primary_selection_state: PrimarySelectionState::new::<Self>(&dh),
             wlr_layer_shell_state: WlrLayerShellState::new::<Self>(&dh),
             display_handle: dh,
+            user_config: UserConfig::default(),
         }
     }
 
